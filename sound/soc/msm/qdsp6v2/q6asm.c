@@ -41,6 +41,14 @@
 #include <sound/audio_cal_utils.h>
 #include <sound/adsp_err.h>
 #include <sound/compress_params.h>
+/* HTC_AUD_START */
+#include <sound/htc_acoustic_alsa.h>
+/* HTC_AUD_END */
+/* HTC_AUD_START */
+#include <soc/qcom/subsystem_restart.h>
+
+static int is_asm_close_failed = 0;
+/* HTC_AUD_END */
 
 #define TRUE        0x01
 #define FALSE       0x00
@@ -155,6 +163,72 @@ static int in_cont_index;
 static int out_cold_index;
 static char *out_buffer;
 static char *in_buffer;
+
+/* HTC_AUD_START */
+#define MODULE_ID_MISC_EFFECT  0x10030001
+#define param_ID_MISC_SET_STEREO_TO_MONO 0x10030081
+int q6asm_enable_effect(struct audio_client *ac, uint32_t module_id,
+			uint32_t param_id, uint32_t payload_size,
+			void *payload)
+{
+	int sz = sizeof(struct asm_params) + payload_size, rc = 0;
+	u8 *q6_cmd = (u8*)kzalloc(sz,GFP_KERNEL);
+	struct asm_params *pasm = (struct asm_params*)q6_cmd;
+
+	if (!q6_cmd) {
+		pr_err("%s, q6_cmd memory alloc failed", __func__);
+		return -ENOMEM;
+	}
+
+	q6asm_add_hdr(ac, &pasm->hdr, sz, TRUE);
+
+	pasm->hdr.opcode = ASM_STREAM_CMD_SET_PP_PARAMS_V2;
+	pasm->param.data_payload_addr_lsw = 0;
+	pasm->param.data_payload_addr_msw = 0;
+	pasm->param.mem_map_handle = 0;
+	pasm->param.data_payload_size = sz -
+				sizeof(pasm->hdr) - sizeof(pasm->param);
+	pasm->data.module_id = module_id;
+	pasm->data.param_id = param_id;
+	pasm->data.param_size = payload_size;
+
+	memcpy(q6_cmd + sizeof(struct asm_params),payload,payload_size);
+
+	rc = apr_send_pkt(ac->apr, (uint32_t *)q6_cmd);
+	if (rc < 0) {
+		pr_err("%s: Enable Q6 effect fail\n", __func__);
+		rc = -EINVAL;
+		goto fail_cmd;
+	}
+
+	rc = wait_event_timeout(ac->cmd_wait,
+			(atomic_read(&ac->cmd_state) == 0), 5*HZ);
+	if (!rc) {
+		pr_err("%s: timeout in sending command to aprn", __func__);
+		rc = -EINVAL;
+		goto fail_cmd;
+	}
+
+	rc = 0;
+fail_cmd:
+	if(q6_cmd)
+		kfree(q6_cmd);
+	return rc;
+}
+
+int htc_set_asm_effect(int enable)
+{
+	int n;
+	pr_info("%s: enable %d\n", __func__, enable);
+	for (n = 1; n <= ASM_ACTIVE_STREAMS_ALLOWED; n++) {
+		if (session[n].ac && ((session[n].ac->io_mode & COMPRESSED_STREAM_IO))) {
+			q6asm_enable_effect(session[n].ac, MODULE_ID_MISC_EFFECT,
+				param_ID_MISC_SET_STEREO_TO_MONO , 4, &enable);
+		}
+	}
+	return 0;
+}
+/* HTC_AUD_END */
 
 static uint32_t adsp_reg_event_opcode[] = {
 	ASM_STREAM_CMD_REGISTER_PP_EVENTS,

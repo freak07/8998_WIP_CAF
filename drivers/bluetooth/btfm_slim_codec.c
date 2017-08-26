@@ -308,7 +308,7 @@ static int btfm_slim_dai_get_channel_map(struct snd_soc_dai *dai,
 		*rx_num = num;
 		break;
 	default:
-		BTFMSLIM_ERR("Unsupported DAI %d", dai->id);
+		BTFMSLIM_ERR("Invalid channel id: %d", dai->id);
 		return -EINVAL;
 	}
 

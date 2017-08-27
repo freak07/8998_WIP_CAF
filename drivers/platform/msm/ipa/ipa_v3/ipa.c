@@ -39,6 +39,7 @@
 #include <soc/qcom/subsystem_restart.h>
 #include <soc/qcom/smem.h>
 #include <soc/qcom/scm.h>
+#include <linux/workqueue.h> //HTC_RIL
 
 #ifdef CONFIG_ARM64
 
@@ -262,6 +263,9 @@ static struct {
 } smmu_info;
 
 static char *active_clients_table_buf;
+
+static struct workqueue_struct *ipa_load_wq; //HTC_RIL
+struct delayed_work ipa_loader_work; //HTC_RIL
 
 int ipa3_active_clients_log_print_buffer(char *buf, int size)
 {
@@ -4139,6 +4143,12 @@ static ssize_t ipa3_write(struct file *file, const char __user *buf,
 
 	char dbg_buff[16] = { 0 };
 
+	//HTC_RIL_START
+	if (ipa_load_wq) {
+		cancel_delayed_work_sync(&ipa_loader_work);
+	}
+	//HTC_RIL_END
+
 	if (sizeof(dbg_buff) < count + 1)
 		return -EFAULT;
 
@@ -4170,7 +4180,14 @@ static ssize_t ipa3_write(struct file *file, const char __user *buf,
 
 		if (result) {
 			IPAERR("FW loading process has failed\n");
-			return result;
+			//HTC_RIL_START
+			if (ipa_load_wq) {
+				queue_delayed_work(ipa_load_wq, &ipa_loader_work, msecs_to_jiffies(500));
+				return result;
+			} else {
+				BUG();
+			}
+			//HTC_RIL_END
 		} else {
 			queue_work(ipa3_ctx->transport_power_mgmt_wq,
 				&ipa3_post_init_work);
@@ -4225,6 +4242,41 @@ static int ipa3_tz_unlock_reg(struct ipa3_context *ipa3_ctx)
 	}
 	return 0;
 }
+
+//HTC_RIL_START
+static void ipa_loader_func(struct work_struct *work)
+{
+	int result = -EINVAL;
+	pr_info("%s: retry\n", __func__);
+
+	/*
+	 * We will trigger the process only if we're in GSI mode, otherwise,
+	 * we just ignore the write.
+	 */
+	if (ipa3_ctx->transport_prototype == IPA_TRANSPORT_TYPE_GSI) {
+		IPA_ACTIVE_CLIENTS_INC_SIMPLE();
+
+		if (ipa3_is_msm_device())
+			result = ipa3_trigger_fw_loading_msms();
+		else
+			result = ipa3_trigger_fw_loading_mdms();
+		/* No IPAv3.x chipsets that don't support FW loading */
+
+		IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
+
+		if (result) {
+			IPAERR("FW loading process has failed by retry \n");
+			if (ipa_load_wq) {
+				queue_delayed_work(ipa_load_wq, &ipa_loader_work, msecs_to_jiffies(500));
+				//return result;
+			} else {
+				BUG();
+			}
+		} else
+			ipa3_post_init(&ipa3_res, ipa3_ctx->dev);
+	}
+}
+//HTC_RIL_END
 
 /**
 * ipa3_pre_init() - Initialize the IPA Driver.
@@ -4650,6 +4702,9 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 		result = -ENODEV;
 		goto fail_device_create;
 	}
+
+ipa_load_wq = create_workqueue("ipa loader queue"); //HTC_RIL
+	INIT_DELAYED_WORK(&ipa_loader_work, ipa_loader_func); //HTC_RIL
 
 	if (ipa3_create_nat_device()) {
 		IPAERR("unable to create nat device\n");

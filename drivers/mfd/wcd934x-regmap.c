@@ -1936,6 +1936,7 @@ static bool wcd934x_is_volatile_register(struct device *dev, unsigned int reg)
 	case WCD934X_BIAS_VBG_FINE_ADJ:
 	case WCD934X_CODEC_CPR_SVS_CX_VDD:
 	case WCD934X_CODEC_CPR_SVS2_CX_VDD:
+	case WCD934X_CDC_TOP_TOP_CFG1:
 		return true;
 	}
 
